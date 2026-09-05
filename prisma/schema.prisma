@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DeviceRole {
+  RECEIVER
+  WORKER
+  ADMIN
+}
+
+enum PaymentStatus {
+  RECEIVED
+  PROCESSED
+  DUPLICATE
+  INVALID
+}
+
+model Device {
+  id         String     @id @default(uuid())
+  name       String
+  role       DeviceRole
+  token      String     @unique
+  lastSeenAt DateTime?
+  createdAt  DateTime   @default(now())
+  payments   Payment[]
+}
+
+model Payment {
+  id               String        @id @default(uuid())
+  source           String        @default("yape")
+  amount           Decimal
+  payerName        String
+  receivedAt       DateTime
+  notificationText String
+  externalId       String?
+  deviceId         String
+  device           Device        @relation(fields: [deviceId], references: [id])
+  dedupHash        String
+  status           PaymentStatus @default(RECEIVED)
+  createdAt        DateTime      @default(now())
+
+  @@index([dedupHash])
+  @@index([createdAt])
+  @@index([status])
+}

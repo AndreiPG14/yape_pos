@@ -16,6 +16,7 @@ const io = new SocketServer(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
 });
 
+app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json());
 app.use(

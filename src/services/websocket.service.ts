@@ -12,7 +12,18 @@ interface PendingCharge {
   createdAt: number;
 }
 
+interface RecentPayment {
+  id: string;
+  amount: number;
+  payerName: string;
+  receivedAt: string;
+  source: string;
+  timestamp: number;
+}
+
 const pendingCharges: PendingCharge[] = [];
+// Store recent undelivered payments for retry
+let lastUndeliveredPayment: RecentPayment | null = null;
 
 export function initWebSocket(socketServer: SocketServer) {
   io = socketServer;
@@ -35,16 +46,34 @@ export function initWebSocket(socketServer: SocketServer) {
 
     if (device.role === 'WORKER' || device.role === 'ADMIN') {
       socket.join('workers');
+
+      // Update socketId for existing pending charge on reconnect
+      const existing = pendingCharges.find((c) => c.deviceId === device.deviceId);
+      if (existing) {
+        existing.socketId = socket.id;
+        console.log(`Cobro pendiente restaurado: ${device.deviceId} S/ ${existing.amount}`);
+      }
+
+      // Deliver undelivered payment if it matches this worker's pending charge
+      if (lastUndeliveredPayment) {
+        const elapsed = Date.now() - lastUndeliveredPayment.timestamp;
+        if (elapsed < 2 * 60 * 1000) {
+          const chargeIdx = pendingCharges.findIndex(
+            (c) => c.deviceId === device.deviceId && Math.abs(c.amount - lastUndeliveredPayment!.amount) < 0.50
+          );
+          if (chargeIdx !== -1) {
+            pendingCharges.splice(chargeIdx, 1);
+            socket.emit('payment:confirmed', lastUndeliveredPayment);
+            console.log(`Pago pendiente entregado a ${device.deviceId}: S/ ${lastUndeliveredPayment.amount}`);
+            lastUndeliveredPayment = null;
+          }
+        } else {
+          lastUndeliveredPayment = null;
+        }
+      }
     }
     if (device.role === 'ADMIN') {
       socket.join('admins');
-    }
-
-    // Update socketId for existing pending charge on reconnect
-    const existing = pendingCharges.find((c) => c.deviceId === device.deviceId);
-    if (existing) {
-      existing.socketId = socket.id;
-      console.log(`Cobro pendiente restaurado: ${device.deviceId} S/ ${existing.amount} (nuevo socket)`);
     }
 
     socket.on('charge:start', (data: { amount: number }) => {
@@ -57,6 +86,18 @@ export function initWebSocket(socketServer: SocketServer) {
         createdAt: Date.now(),
       });
       console.log(`Cobro pendiente: ${device.deviceId} espera S/ ${data.amount}`);
+
+      // Check if there's an undelivered payment that matches
+      if (lastUndeliveredPayment) {
+        const elapsed = Date.now() - lastUndeliveredPayment.timestamp;
+        if (elapsed < 2 * 60 * 1000 && Math.abs(data.amount - lastUndeliveredPayment.amount) < 0.50) {
+          const chargeIdx = pendingCharges.findIndex((c) => c.deviceId === device.deviceId);
+          if (chargeIdx !== -1) pendingCharges.splice(chargeIdx, 1);
+          socket.emit('payment:confirmed', lastUndeliveredPayment);
+          console.log(`Pago pendiente entregado (charge:start) a ${device.deviceId}: S/ ${lastUndeliveredPayment.amount}`);
+          lastUndeliveredPayment = null;
+        }
+      }
     });
 
     socket.on('charge:cancel', () => {
@@ -65,7 +106,6 @@ export function initWebSocket(socketServer: SocketServer) {
     });
 
     socket.on('disconnect', () => {
-      // Don't remove pending charges on disconnect — worker may reconnect
       console.log(`Dispositivo desconectado: ${device.deviceId}`);
     });
   });
@@ -88,7 +128,6 @@ export function broadcastPayment(payment: {
     }
   }
 
-  // Find the first pending charge that matches the amount (within 0.50)
   const matchIdx = pendingCharges.findIndex(
     (c) => Math.abs(c.amount - payment.amount) < 0.50
   );
@@ -96,20 +135,27 @@ export function broadcastPayment(payment: {
   if (matchIdx !== -1) {
     const match = pendingCharges[matchIdx];
     pendingCharges.splice(matchIdx, 1);
-    // Send to the specific worker's socket AND broadcast to workers room as fallback
     const targetSocket = io.sockets.sockets.get(match.socketId);
     if (targetSocket?.connected) {
       targetSocket.emit('payment:confirmed', payment);
       console.log(`Pago S/ ${payment.amount} asignado a ${match.deviceId}`);
     } else {
-      // Worker disconnected, broadcast to all
+      // Worker disconnected — store for retry when they reconnect
+      lastUndeliveredPayment = { ...payment, timestamp: Date.now() };
+      // Also broadcast to any connected workers
       io.to('workers').emit('payment:confirmed', payment);
-      console.log(`Pago S/ ${payment.amount} broadcast (worker ${match.deviceId} desconectado)`);
+      console.log(`Pago S/ ${payment.amount} guardado para retry (worker ${match.deviceId} desconectado)`);
     }
   } else {
-    // No pending charge matches, broadcast to all workers
-    io.to('workers').emit('payment:confirmed', payment);
-    console.log(`Pago S/ ${payment.amount} broadcast a todos (sin cobro pendiente)`);
+    // No pending charge, broadcast to all and store for retry
+    const workersRoom = io.sockets.adapter.rooms.get('workers');
+    if (!workersRoom || workersRoom.size === 0) {
+      lastUndeliveredPayment = { ...payment, timestamp: Date.now() };
+      console.log(`Pago S/ ${payment.amount} guardado (no hay workers conectados)`);
+    } else {
+      io.to('workers').emit('payment:confirmed', payment);
+      console.log(`Pago S/ ${payment.amount} broadcast a ${workersRoom.size} workers`);
+    }
   }
 }
 

@@ -50,6 +50,45 @@ router.post(
   }
 );
 
+router.get('/check', authenticate, async (req, res) => {
+  const amount = parseFloat(req.query.amount as string);
+  const since = req.query.since as string;
+  if (!amount || !since) {
+    res.status(400).json({ error: 'amount and since required' });
+    return;
+  }
+  try {
+    const { PrismaClient } = require('@prisma/client');
+    const prisma = new PrismaClient();
+    const payment = await prisma.payment.findFirst({
+      where: {
+        amount: { gte: amount - 0.50, lte: amount + 0.50 },
+        createdAt: { gte: new Date(since) },
+        status: { not: 'DUPLICATE' },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    await prisma.$disconnect();
+    if (payment) {
+      res.json({
+        found: true,
+        payment: {
+          id: payment.id,
+          amount: Number(payment.amount),
+          payerName: payment.payerName,
+          receivedAt: payment.receivedAt.toISOString(),
+          source: payment.source,
+        },
+      });
+    } else {
+      res.json({ found: false });
+    }
+  } catch (err) {
+    console.error('Error checking payment:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 router.get('/', authenticate, async (req, res) => {
   const page = parseInt(req.query.page as string) || 1;
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);

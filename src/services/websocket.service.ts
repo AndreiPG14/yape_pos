@@ -40,6 +40,13 @@ export function initWebSocket(socketServer: SocketServer) {
       socket.join('admins');
     }
 
+    // Update socketId for existing pending charge on reconnect
+    const existing = pendingCharges.find((c) => c.deviceId === device.deviceId);
+    if (existing) {
+      existing.socketId = socket.id;
+      console.log(`Cobro pendiente restaurado: ${device.deviceId} S/ ${existing.amount} (nuevo socket)`);
+    }
+
     socket.on('charge:start', (data: { amount: number }) => {
       const idx = pendingCharges.findIndex((c) => c.deviceId === device.deviceId);
       if (idx !== -1) pendingCharges.splice(idx, 1);
@@ -58,8 +65,7 @@ export function initWebSocket(socketServer: SocketServer) {
     });
 
     socket.on('disconnect', () => {
-      const idx = pendingCharges.findIndex((c) => c.deviceId === device.deviceId);
-      if (idx !== -1) pendingCharges.splice(idx, 1);
+      // Don't remove pending charges on disconnect — worker may reconnect
       console.log(`Dispositivo desconectado: ${device.deviceId}`);
     });
   });
@@ -90,12 +96,20 @@ export function broadcastPayment(payment: {
   if (matchIdx !== -1) {
     const match = pendingCharges[matchIdx];
     pendingCharges.splice(matchIdx, 1);
-    // Send only to the specific worker who requested this charge
-    io.to(match.socketId).emit('payment:confirmed', payment);
-    console.log(`Pago S/ ${payment.amount} asignado a ${match.deviceId}`);
+    // Send to the specific worker's socket AND broadcast to workers room as fallback
+    const targetSocket = io.sockets.sockets.get(match.socketId);
+    if (targetSocket?.connected) {
+      targetSocket.emit('payment:confirmed', payment);
+      console.log(`Pago S/ ${payment.amount} asignado a ${match.deviceId}`);
+    } else {
+      // Worker disconnected, broadcast to all
+      io.to('workers').emit('payment:confirmed', payment);
+      console.log(`Pago S/ ${payment.amount} broadcast (worker ${match.deviceId} desconectado)`);
+    }
   } else {
     // No pending charge matches, broadcast to all workers
     io.to('workers').emit('payment:confirmed', payment);
+    console.log(`Pago S/ ${payment.amount} broadcast a todos (sin cobro pendiente)`);
   }
 }
 

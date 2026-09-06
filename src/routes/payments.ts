@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { PrismaClient } from '@prisma/client';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { createPayment, getTodayPayments } from '../services/payment.service';
 
 const router = Router();
+const prisma = new PrismaClient();
 
 const paymentSchema = z.object({
   source: z.string().default('yape'),
@@ -58,8 +60,7 @@ router.get('/check', authenticate, async (req, res) => {
     return;
   }
   try {
-    const { PrismaClient } = require('@prisma/client');
-    const prisma = new PrismaClient();
+    console.log(`GET /payments/check amount=${amount} since=${since}`);
     const payment = await prisma.payment.findFirst({
       where: {
         amount: { gte: amount - 0.50, lte: amount + 0.50 },
@@ -68,8 +69,8 @@ router.get('/check', authenticate, async (req, res) => {
       },
       orderBy: { createdAt: 'desc' },
     });
-    await prisma.$disconnect();
     if (payment) {
+      console.log(`CHECK: pago encontrado S/ ${Number(payment.amount)} de ${payment.payerName}`);
       res.json({
         found: true,
         payment: {

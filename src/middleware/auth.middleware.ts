@@ -19,6 +19,7 @@ declare global {
 export function authenticate(req: Request, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
+    console.log('Auth: no Bearer token en', req.method, req.path);
     res.status(401).json({ error: 'Token requerido' });
     return;
   }
@@ -26,7 +27,8 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
     const payload = jwt.verify(header.slice(7), config.jwtSecret) as AuthPayload;
     req.device = payload;
     next();
-  } catch {
+  } catch (err) {
+    console.log('Auth: token inválido en', req.method, req.path, (err as Error).message);
     res.status(401).json({ error: 'Token inválido' });
   }
 }

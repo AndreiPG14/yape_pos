@@ -9,7 +9,7 @@ const paymentSchema = z.object({
   source: z.string().default('yape'),
   amount: z.number().positive(),
   payerName: z.string().min(1),
-  receivedAt: z.string().datetime(),
+  receivedAt: z.string(),
   notificationText: z.string().min(1),
   externalId: z.string().optional(),
 });
@@ -19,8 +19,10 @@ router.post(
   authenticate,
   requireRole('RECEIVER'),
   async (req, res) => {
+    console.log('POST /payments recibido:', JSON.stringify(req.body));
     const parsed = paymentSchema.safeParse(req.body);
     if (!parsed.success) {
+      console.log('Validación fallida:', JSON.stringify(parsed.error.flatten()));
       res.status(400).json({ error: 'Datos inválidos', details: parsed.error.flatten() });
       return;
     }
